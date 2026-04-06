@@ -12,14 +12,13 @@ def calcola_potenza_eolica(v_vento_ms, p_nominale_w=1000.0):
     """
     Applica una curva di potenza semplificata per una turbina da 1 kW.
     """
-    v_cut_in = 3.0    # Vento minimo per partire
-    v_rated = 12.0    # Vento per potenza massima
-    v_cut_out = 25.0  # Vento massimo (spegnimento di sicurezza)
+    v_cut_in = 3.0    
+    v_rated = 12.0    
+    v_cut_out = 25.0  
     
     if v_vento_ms < v_cut_in or v_vento_ms > v_cut_out:
         return 0.0
     elif v_cut_in <= v_vento_ms < v_rated:
-        # Interpolazione cubica
         return p_nominale_w * ((v_vento_ms**3 - v_cut_in**3) / (v_rated**3 - v_cut_in**3))
     else:
         return p_nominale_w
@@ -28,7 +27,7 @@ def calcola_potenza_eolica(v_vento_ms, p_nominale_w=1000.0):
 def scarica_profili_energia(lat, lon, tipo_tracker):
     """Scarica e allinea i dati FV da PVGIS e i dati del vento da Open-Meteo"""
     
-    # 1. SCARICA FOTOVOLTAICO (PVGIS)
+    # 1. SCARICA FOTOVOLTAICO
     url_pv = "https://re.jrc.ec.europa.eu/api/v5_2/seriescalc"
     params_pv = {
         "lat": lat, "lon": lon, "pvcalculation": 1,
@@ -41,12 +40,12 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     
     data_pv = resp_pv.json()
     df_pv = pd.DataFrame(data_pv['outputs']['hourly'])
-    # Arrotondiamo all'ora spaccata per far combaciare i due database
+    # Usa .dt per modificare la Series di Pandas
     df_pv['Data_Ora'] = pd.to_datetime(df_pv['time'], format='%Y%m%d:%H%M').dt.floor('h')
     df_pv.rename(columns={'P': 'FV_1kW_W'}, inplace=True)
     df_pv = df_pv[['Data_Ora', 'FV_1kW_W']]
     
-    # 2. SCARICA VENTO (Open-Meteo)
+    # 2. SCARICA VENTO
     url_wind = "https://archive-api.open-meteo.com/v1/archive"
     params_wind = {
         "latitude": lat, "longitude": lon,
@@ -60,7 +59,7 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
         
     data_wind = resp_wind.json()
     df_wind = pd.DataFrame({
-        # Arrotondiamo all'ora anche qui per massima sicurezza
+        # Senza .dt perché è un DatetimeIndex diretto
         'Data_Ora': pd.to_datetime(data_wind['hourly']['time']).floor('h'),
         'Vento_ms': data_wind['hourly']['windspeed_100m']
     })
@@ -114,7 +113,6 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
     energia_totale_richiesta_wh = carico_w * ore_totali
     energia_totale_prodotta_wh = tot_fv_prodotto + tot_eolico_prodotto
     
-    # Protezione matematica per evitare la divisione per zero
     autarchia = (energia_fornita_al_carico_wh / energia_totale_richiesta_wh) * 100 if energia_totale_richiesta_wh > 0 else 100.0
     curtailment = (energia_tagliata_wh / energia_totale_prodotta_wh) * 100 if energia_totale_prodotta_wh > 0 else 0.0
     
@@ -127,7 +125,8 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
         "eolico_kwh": tot_eolico_prodotto / 1000,
         "prodotta_kwh": energia_totale_prodotta_wh / 1000,
         "richiesta_kwh": energia_totale_richiesta_wh / 1000,
-        "tagliata_kwh": energia_tagliata_wh / 1000
+        "tagliata_kwh": energia_tagliata_wh / 1000,
+        "carico_w": carico_w
     }
 
 # ==========================================
@@ -136,7 +135,7 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
 
 st.set_page_config(page_title="Simulatore FV + Eolico", layout="wide")
 st.title("🌪️☀️ Simulatore Ibrido Off-Grid")
-st.markdown("Combina fotovoltaico ed eolico per vedere come si compensano durante l'anno e riducono l'uso delle batterie.")
+st.markdown("Combina fotovoltaico ed eolico per bilanciare la produzione durante l'anno.")
 
 if "lat" not in st.session_state:
     st.session_state.lat = 45.4642
@@ -171,11 +170,14 @@ with col2:
         st.caption("Usa dati storici del vento a 100m di quota.")
     
     st.markdown("---")
+    st.subheader("3. Consumi e Accumulo")
     c_carico, c_batt = st.columns(2)
     with c_carico:
-        w_carico = st.number_input("Carico Costante (Watt):", min_value=0.0, value=1000.0, step=100.0)
+        mwh_annui = st.number_input("Fabbisogno Annuo (MWh):", min_value=0.0, value=8.76, step=0.5)
+        # Mostra il calcolo dinamico all'utente: (MWh * 1000) / 8760 ore standard
+        st.caption(f"💡 Equivale a un carico costante di **{(mwh_annui * 1000) / 8760:.2f} kW**")
     with c_batt:
-        wh_batteria = st.number_input("Capacità Batteria (Wh):", min_value=0.0, value=20000.0, step=1000.0)
+        kwh_batteria = st.number_input("Capacità Batteria (kWh):", min_value=0.0, value=20.0, step=1.0)
     
     esegui = st.button("🚀 Avvia Simulazione Ibrida", use_container_width=True, type="primary")
 
@@ -190,6 +192,13 @@ if esegui:
         df = scarica_profili_energia(st.session_state.lat, st.session_state.lon, tracker)
         
         if df is not None and not df.empty:
+            # Calcoliamo i Watt di carico dividendo i MWh totali per le ore effettive del dataset (8784)
+            ore_totali = len(df)
+            w_carico = (mwh_annui * 1_000_000) / ore_totali
+            
+            # Convertiamo i kWh della batteria in Wh
+            wh_batteria = kwh_batteria * 1000.0
+
             res = esegui_simulazione(df, kw_pannelli, kw_eolico, w_carico, wh_batteria)
             
             st.subheader("📊 Report Energetico Annuale")
@@ -202,6 +211,7 @@ if esegui:
             st.markdown("---")
             
             m4, m5, m6, m7 = st.columns(4)
+            # Mostriamo i valori ricalcolati per pulizia estetica
             m4.metric("Consumo Richiesto", f"{res['richiesta_kwh']:.0f} kWh")
             m5.metric("Generazione Solare", f"{res['fv_kwh']:.0f} kWh")
             m6.metric("Generazione Eolica", f"{res['eolico_kwh']:.0f} kWh")
