@@ -61,7 +61,7 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     data_wind = resp_wind.json()
     df_wind = pd.DataFrame({
         # Arrotondiamo all'ora anche qui per massima sicurezza
-        'Data_Ora': pd.to_datetime(data_wind['hourly']['time']).dt.floor('h'),
+        'Data_Ora': pd.to_datetime(data_wind['hourly']['time']).floor('h'),
         'Vento_ms': data_wind['hourly']['windspeed_100m']
     })
     
