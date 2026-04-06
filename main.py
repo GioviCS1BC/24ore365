@@ -42,7 +42,7 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     data_pv = resp_pv.json()
     df_pv = pd.DataFrame(data_pv['outputs']['hourly'])
     # Arrotondiamo all'ora spaccata per far combaciare i due database
-    df_pv['Data_Ora'] = pd.to_datetime(df_pv['time'], format='%Y%m%d:%H%M').dt.floor('H')
+    df_pv['Data_Ora'] = pd.to_datetime(df_pv['time'], format='%Y%m%d:%H%M').dt.floor('h')
     df_pv.rename(columns={'P': 'FV_1kW_W'}, inplace=True)
     df_pv = df_pv[['Data_Ora', 'FV_1kW_W']]
     
@@ -61,7 +61,7 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     data_wind = resp_wind.json()
     df_wind = pd.DataFrame({
         # Arrotondiamo all'ora anche qui per massima sicurezza
-        'Data_Ora': pd.to_datetime(data_wind['hourly']['time']).dt.floor('H'),
+        'Data_Ora': pd.to_datetime(data_wind['hourly']['time']).dt.floor('h'),
         'Vento_ms': data_wind['hourly']['windspeed_100m']
     })
     
