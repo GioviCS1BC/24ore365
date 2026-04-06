@@ -115,7 +115,8 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
     energia_totale_richiesta_wh = carico_w * ore_totali
     energia_totale_prodotta_wh = tot_fv_prodotto + tot_eolico_prodotto
     
-    autarchia = (energia_fornita_al_carico_wh / energia_totale_richiesta_wh) * 100
+   # Se l'energia richiesta è 0, copriamo tecnicamente il 100% del nostro (nullo) fabbisogno
+    autarchia = (energia_fornita_al_carico_wh / energia_totale_richiesta_wh) * 100 if energia_totale_richiesta_wh > 0 else 100.0
     curtailment = (energia_tagliata_wh / energia_totale_prodotta_wh) * 100 if energia_totale_prodotta_wh > 0 else 0
     
     return {
