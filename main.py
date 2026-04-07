@@ -127,6 +127,7 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
         "fv_kwh": tot_fv_wh / 1000,
         "eolico_kwh": tot_eolico_wh / 1000,
         "richiesta_kwh": richiesta_totale_wh / 1000,
+        "tagliata_kwh": energia_tagliata_wh / 1000,  # <--- ECCO LA RIGA MANCANTE
         "storia_soc": storia_soc
     }
 
