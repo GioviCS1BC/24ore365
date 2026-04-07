@@ -40,7 +40,6 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     
     data_pv = resp_pv.json()
     df_pv = pd.DataFrame(data_pv['outputs']['hourly'])
-    # Usa .dt per modificare la Series di Pandas
     df_pv['Data_Ora'] = pd.to_datetime(df_pv['time'], format='%Y%m%d:%H%M').dt.floor('h')
     df_pv.rename(columns={'P': 'FV_1kW_W'}, inplace=True)
     df_pv = df_pv[['Data_Ora', 'FV_1kW_W']]
@@ -59,7 +58,6 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
         
     data_wind = resp_wind.json()
     df_wind = pd.DataFrame({
-        # Senza .dt perché è un DatetimeIndex diretto
         'Data_Ora': pd.to_datetime(data_wind['hourly']['time']).floor('h'),
         'Vento_ms': data_wind['hourly']['windspeed_100m']
     })
@@ -72,7 +70,7 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     return df_tot
 
 def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
-    """Simulazione ibrida: Fotovoltaico + Eolico + Batteria"""
+    """Simulazione ibrida tracciando la batteria ora per ora"""
     ore_totali = len(df_energia)
     soc = 0.0  
     ore_scoperte = 0
@@ -80,6 +78,9 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
     energia_fornita_al_carico_wh = 0.0
     tot_fv_prodotto = 0.0
     tot_eolico_prodotto = 0.0
+    
+    # Array per tracciare l'andamento del SOC (State of Charge)
+    storia_soc = []
     
     for _, row in df_energia.iterrows():
         p_fv = row['FV_1kW_W'] * mult_fv
@@ -94,6 +95,7 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
         energia_eccedente = p_tot - copertura_diretta
         energia_ora_corrente = copertura_diretta
         
+        # Gestione accumulo
         if energia_eccedente > 0:
             spazio_batteria = batteria_wh - soc
             energia_immessa = min(energia_eccedente, spazio_batteria)
@@ -109,6 +111,9 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
             ore_scoperte += 1
             
         energia_fornita_al_carico_wh += energia_ora_corrente
+        
+        # Salviamo lo stato della batteria a fine ora
+        storia_soc.append(soc)
 
     energia_totale_richiesta_wh = carico_w * ore_totali
     energia_totale_prodotta_wh = tot_fv_prodotto + tot_eolico_prodotto
@@ -126,7 +131,7 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
         "prodotta_kwh": energia_totale_prodotta_wh / 1000,
         "richiesta_kwh": energia_totale_richiesta_wh / 1000,
         "tagliata_kwh": energia_tagliata_wh / 1000,
-        "carico_w": carico_w
+        "storia_soc": storia_soc
     }
 
 # ==========================================
@@ -135,6 +140,27 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh):
 
 st.set_page_config(page_title="Simulatore FV + Eolico", layout="wide")
 st.title("🌪️☀️ Simulatore Ibrido Off-Grid")
+
+# --- SEZIONE INFO (Expander/Bottone) ---
+with st.expander("ℹ️ Clicca qui per scoprire come funziona questo simulatore"):
+    st.markdown("""
+    **Cosa fa questo strumento?**
+    Questo codice simula il comportamento di un impianto energetico completamente staccato dalla rete elettrica (off-grid) per un intero anno (8784 ore). 
+
+    **Da dove arrivano i dati?**
+    - **Sole:** Si collega in tempo reale ai server di *PVGIS* (Unione Europea) scaricando il profilo di irraggiamento esatto per le coordinate scelte.
+    - **Vento:** Usa le API di *Open-Meteo* per scaricare la velocità storica del vento a 100 metri di quota, calcolando la resa di una turbina eolica.
+    
+    **La Logica del Bilancio Ora per Ora:**
+    Ogni ora, il simulatore somma i Watt prodotti dal vento e dal sole e li confronta con il carico richiesto:
+    1. Se la produzione è maggiore del consumo, alimenta la casa e butta il resto nella **batteria**.
+    2. Se la batteria è piena, l'energia extra viene "sprecata" (questo è il **Curtailment**).
+    3. Se la produzione non basta (es. di notte), preleva energia dalla batteria.
+    4. Se la batteria è vuota e non c'è né sole né vento, si segna un'**ora di blackout**.
+    
+    Il risultato calcola quanta della tua energia annuale richiesta sei riuscito a coprire da solo (**Autarchia**).
+    """)
+
 st.markdown("Combina fotovoltaico ed eolico per bilanciare la produzione durante l'anno.")
 
 if "lat" not in st.session_state:
@@ -174,7 +200,6 @@ with col2:
     c_carico, c_batt = st.columns(2)
     with c_carico:
         mwh_annui = st.number_input("Fabbisogno Annuo (MWh):", min_value=0.0, value=8.76, step=0.5)
-        # Mostra il calcolo dinamico all'utente: (MWh * 1000) / 8760 ore standard
         st.caption(f"💡 Equivale a un carico costante di **{(mwh_annui * 1000) / 8760:.2f} kW**")
     with c_batt:
         kwh_batteria = st.number_input("Capacità Batteria (kWh):", min_value=0.0, value=20.0, step=1.0)
@@ -184,7 +209,7 @@ with col2:
 st.divider()
 
 # ==========================================
-# ESECUZIONE
+# ESECUZIONE E RISULTATI
 # ==========================================
 
 if esegui:
@@ -192,11 +217,8 @@ if esegui:
         df = scarica_profili_energia(st.session_state.lat, st.session_state.lon, tracker)
         
         if df is not None and not df.empty:
-            # Calcoliamo i Watt di carico dividendo i MWh totali per le ore effettive del dataset (8784)
             ore_totali = len(df)
             w_carico = (mwh_annui * 1_000_000) / ore_totali
-            
-            # Convertiamo i kWh della batteria in Wh
             wh_batteria = kwh_batteria * 1000.0
 
             res = esegui_simulazione(df, kw_pannelli, kw_eolico, w_carico, wh_batteria)
@@ -211,11 +233,25 @@ if esegui:
             st.markdown("---")
             
             m4, m5, m6, m7 = st.columns(4)
-            # Mostriamo i valori ricalcolati per pulizia estetica
             m4.metric("Consumo Richiesto", f"{res['richiesta_kwh']:.0f} kWh")
             m5.metric("Generazione Solare", f"{res['fv_kwh']:.0f} kWh")
             m6.metric("Generazione Eolica", f"{res['eolico_kwh']:.0f} kWh")
             m7.metric("Generazione Totale", f"{res['prodotta_kwh']:.0f} kWh")
+            
+            st.markdown("---")
+            
+            # --- PLOT DEL GRAFICO DELLA BATTERIA ---
+            st.subheader("🔋 Andamento della Carica della Batteria (365 giorni)")
+            st.caption("Questo grafico mostra quanti kWh erano presenti nella batteria in ogni ora dell'anno. Nota i cali durante i periodi invernali o di scarsità di vento.")
+            
+            # Creiamo un DataFrame ad hoc per il grafico usando le date scaricate
+            df_plot = pd.DataFrame({
+                "Data": df["Data_Ora"],
+                "Carica (kWh)": [val / 1000 for val in res["storia_soc"]]
+            }).set_index("Data")
+            
+            # Usiamo il line_chart nativo di Streamlit per un rendering veloce ed elegante
+            st.line_chart(df_plot, y="Carica (kWh)")
             
         else:
             st.error("Errore nello scaricamento o allineamento dei dati meteo/solari. Riprova con un'altra coordinata.")
