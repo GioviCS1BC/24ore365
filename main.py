@@ -9,229 +9,149 @@ from streamlit_folium import st_folium
 # ==========================================
 
 def calcola_potenza_eolica(v_vento_ms, p_nominale_w=1000.0):
-    v_cut_in = 3.0    
-    v_rated = 12.0    
-    v_cut_out = 25.0  
-    
-    if v_vento_ms < v_cut_in or v_vento_ms > v_cut_out:
-        return 0.0
+    v_cut_in, v_rated, v_cut_out = 3.0, 12.0, 25.0
+    if v_vento_ms < v_cut_in or v_vento_ms > v_cut_out: return 0.0
     elif v_cut_in <= v_vento_ms < v_rated:
         return p_nominale_w * ((v_vento_ms**3 - v_cut_in**3) / (v_rated**3 - v_cut_in**3))
-    else:
-        return p_nominale_w
+    return p_nominale_w
 
 @st.cache_data(show_spinner=False)
 def scarica_profili_energia(lat, lon, tipo_tracker):
-    # 1. FOTOVOLTAICO (PVGIS)
     url_pv = "https://re.jrc.ec.europa.eu/api/v5_2/seriescalc"
-    params_pv = {
-        "lat": lat, 
-        "lon": lon, 
-        "pvcalculation": 1,
-        "peakpower": 1.0, 
-        "loss": 14.0,  
-        "outputformat": "json", 
-        "startyear": 2020, 
-        "endyear": 2020
-    }
-    
-    # Assegnazione corretta dei tracker e degli angoli ottimali
-    if tipo_tracker == 0:
-        params_pv["trackingtype"] = 0
-        params_pv["optimalangles"] = 1
-    elif tipo_tracker == 5:
-        params_pv["trackingtype"] = 5
-        params_pv["optimalangles"] = 1 # Ottimizza l'inclinazione dell'asse
-    else:
-        params_pv["trackingtype"] = tipo_tracker
+    params_pv = {"lat": lat, "lon": lon, "pvcalculation": 1, "peakpower": 1.0, "loss": 14.0, "outputformat": "json", "startyear": 2020, "endyear": 2020}
+    if tipo_tracker == 0: params_pv["trackingtype"], params_pv["optimalangles"] = 0, 1
+    elif tipo_tracker == 5: params_pv["trackingtype"], params_pv["optimalangles"] = 5, 1
+    else: params_pv["trackingtype"] = tipo_tracker
         
     resp_pv = requests.get(url_pv, params=params_pv)
     if resp_pv.status_code != 200: return None
-    
-    data_pv = resp_pv.json()
-    df_pv = pd.DataFrame(data_pv['outputs']['hourly'])
+    df_pv = pd.DataFrame(resp_pv.json()['outputs']['hourly'])
     df_pv['Data_Ora'] = pd.to_datetime(df_pv['time'], format='%Y%m%d:%H%M').dt.floor('h')
     df_pv.rename(columns={'P': 'FV_1kW_W'}, inplace=True)
-    df_pv = df_pv[['Data_Ora', 'FV_1kW_W']]
     
-    # 2. VENTO (Open-Meteo)
     url_wind = "https://archive-api.open-meteo.com/v1/archive"
-    params_wind = {
-        "latitude": lat, "longitude": lon,
-        "start_date": "2020-01-01", "end_date": "2020-12-31",
-        "hourly": "windspeed_100m", "wind_speed_unit": "ms", "timezone": "UTC"
-    }
+    params_wind = {"latitude": lat, "longitude": lon, "start_date": "2020-01-01", "end_date": "2020-12-31", "hourly": "windspeed_100m", "wind_speed_unit": "ms", "timezone": "UTC"}
     resp_wind = requests.get(url_wind, params=params_wind)
     if resp_wind.status_code != 200: return None
-        
-    data_wind = resp_wind.json()
-    df_wind = pd.DataFrame({
-        'Data_Ora': pd.to_datetime(data_wind['hourly']['time']).floor('h'),
-        'Vento_ms': data_wind['hourly']['windspeed_100m']
-    })
+    df_wind = pd.DataFrame({'Data_Ora': pd.to_datetime(resp_wind.json()['hourly']['time']).floor('h'), 'Vento_ms': resp_wind.json()['hourly']['windspeed_100m']})
     df_wind['Eolico_1kW_W'] = df_wind['Vento_ms'].apply(calcola_potenza_eolica)
-    df_wind = df_wind[['Data_Ora', 'Eolico_1kW_W']]
     
-    return pd.merge(df_pv, df_wind, on='Data_Ora', how='inner')
+    return pd.merge(df_pv[['Data_Ora', 'FV_1kW_W']], df_wind[['Data_Ora', 'Eolico_1kW_W']], on='Data_Ora', how='inner')
 
-def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, p_backup_w):
-    ore_totali = len(df_energia)
-    soc = 0.0  
-    ore_backup = 0
-    ore_blackout = 0
-    energia_tagliata_wh = 0.0      
-    energia_backup_wh = 0.0
-    energia_fornita_rinnovabili_wh = 0.0
-    tot_fv_wh = 0.0
-    tot_eolico_wh = 0.0
+def esegui_simulazione_avanzata(df, mult_fv, mult_eolico, carico_w, batt_wh, p_gen_w, start_soc_p, stop_soc_p):
+    soc = batt_wh * 0.5 # Partiamo al 50%
+    gen_on = False
+    ore_backup, ore_blackout = 0, 0
+    e_tagliata, e_gen, e_fv, e_wind = 0.0, 0.0, 0.0, 0.0
     storia_soc = []
     
-    for _, row in df_energia.iterrows():
-        p_fv = row['FV_1kW_W'] * mult_fv
-        p_wind = row['Eolico_1kW_W'] * mult_eolico
+    soc_start = batt_wh * (start_soc_p / 100)
+    soc_stop = batt_wh * (stop_soc_p / 100)
+
+    for _, row in df.iterrows():
+        p_fv, p_wind = row['FV_1kW_W'] * mult_fv, row['Eolico_1kW_W'] * mult_eolico
         p_rinnovabile = p_fv + p_wind
-        tot_fv_wh += p_fv
-        tot_eolico_wh += p_wind
+        e_fv += p_fv
+        e_wind += p_wind
         
-        copertura_diretta = min(p_rinnovabile, carico_w)
-        carico_residuo = carico_w - copertura_diretta
-        energia_eccedente = p_rinnovabile - copertura_diretta
-        energia_da_rinnovabili_ora = copertura_diretta
+        # Logica Isteresi Generatore
+        if soc <= soc_start: gen_on = True
+        if soc >= soc_stop: gen_on = False
         
-        if energia_eccedente > 0:
-            spazio = batteria_wh - soc
-            energia_immessa = min(energia_eccedente, spazio)
-            soc += energia_immessa
-            energia_tagliata_wh += (energia_eccedente - energia_immessa)
-            
-        if carico_residuo > 0:
-            prelievo_batt = min(soc, carico_residuo)
-            soc -= prelievo_batt
-            carico_residuo -= prelievo_batt
-            energia_da_rinnovabili_ora += prelievo_batt
-            
-        energia_fornita_backup_ora = 0.0
-        if carico_residuo > 0 and p_backup_w > 0:
+        p_gen_ora = p_gen_w if gen_on else 0.0
+        if gen_on: 
             ore_backup += 1
-            energia_fornita_backup_ora = min(p_backup_w, carico_residuo)
-            energia_backup_wh += energia_fornita_backup_ora
-            carico_residuo -= energia_fornita_backup_ora
+            e_gen += p_gen_ora
+        
+        # Bilancio: Rinnovabili + Generatore vs Carico
+        p_totale = p_rinnovabile + p_gen_ora
+        
+        if p_totale >= carico_w:
+            surplus = p_totale - carico_w
+            immessa = min(surplus, batt_wh - soc)
+            soc += immessa
+            e_tagliata += (surplus - immessa)
+        else:
+            deficit = carico_w - p_totale
+            prelievo_batt = min(soc, deficit)
+            soc -= prelievo_batt
+            if (deficit - prelievo_batt) > 0.1: ore_blackout += 1
             
-        if carico_residuo > 0.01:
-            ore_blackout += 1
-            
-        energia_fornita_rinnovabili_wh += energia_da_rinnovabili_ora
         storia_soc.append(soc)
 
-    richiesta_totale_wh = carico_w * ore_totali
-    autarchia_rinnovabile = (energia_fornita_rinnovabili_wh / richiesta_totale_wh) * 100 if richiesta_totale_wh > 0 else 100.0
-    copertura_totale = ((energia_fornita_rinnovabili_wh + energia_backup_wh) / richiesta_totale_wh) * 100 if richiesta_totale_wh > 0 else 100.0
-    curtailment = (energia_tagliata_wh / (tot_fv_wh + tot_eolico_wh)) * 100 if (tot_fv_wh + tot_eolico_wh) > 0 else 0.0
+    richiesta_kwh = (carico_w * len(df)) / 1000
+    autarchia = ((richiesta_kwh * 1000 - (ore_blackout * carico_w) - e_gen) / (richiesta_kwh * 1000)) * 100
     
     return {
-        "ore_backup": ore_backup,
-        "ore_blackout": ore_blackout,
-        "autarchia_rinnovabile": autarchia_rinnovabile,
-        "copertura_totale": copertura_totale,
-        "curtailment": curtailment,
-        "backup_kwh": energia_backup_wh / 1000,
-        "fv_kwh": tot_fv_wh / 1000,
-        "eolico_kwh": tot_eolico_wh / 1000,
-        "richiesta_kwh": richiesta_totale_wh / 1000,
-        "tagliata_kwh": energia_tagliata_wh / 1000,
-        "storia_soc": storia_soc
+        "autarchia": max(0, autarchia), "ore_gen": ore_backup, "ore_blackout": ore_blackout,
+        "gen_kwh": e_gen / 1000, "fv_kwh": e_fv / 1000, "wind_kwh": e_wind / 1000,
+        "tagliata_kwh": e_tagliata / 1000, "storia_soc": storia_soc
     }
 
 # ==========================================
-# INTERFACCIA STREAMLIT
+# INTERFACCIA
 # ==========================================
 
-st.set_page_config(page_title="Simulatore Ibrido con Backup", layout="wide")
-st.title("🔋 Simulatore Ibrido: Rinnovabili + Batteria + Backup")
+st.set_page_config(page_title="EMS Simulator", layout="wide")
+st.title("🔋 Smart Hybrid EMS Simulator")
 
-with st.expander("ℹ️ Come funziona questo simulatore?"):
+with st.expander("ℹ️ Logica di ricarica con generatore"):
     st.markdown("""
-    Questo strumento simula un impianto off-grid con generatore di emergenza su base annuale.
-    1. Il sistema dà priorità all'uso diretto di **Sole e Vento**.
-    2. L'energia eccedente carica la **Batteria**. L'eventuale ulteriore eccesso viene scartato (Curtailment).
-    3. Quando la produzione cala, si attinge alla Batteria.
-    4. Se la batteria è vuota, si accende il **Generatore di Backup** (fino alla potenza massima impostata).
-    5. Se il carico richiesto è superiore alla potenza del generatore, si verifica un **Blackout parziale o totale**.
+    Il generatore non si limita a coprire il buco energetico, ma agisce come un **caricabatterie intelligente**:
+    - **Accensione:** Scatta quando la batteria scende sotto la soglia minima (Start SoC).
+    - **Funzionamento:** Eroga la sua potenza massima per alimentare il carico e contemporaneamente ricaricare la batteria.
+    - **Spegnimento:** Continua a girare finché la batteria non raggiunge la soglia di sicurezza (Stop SoC).
     """)
 
 if "lat" not in st.session_state: st.session_state.lat, st.session_state.lon = 45.4642, 9.1900
 
-col1, col2 = st.columns([1, 1.2])
+col1, col2 = st.columns([1, 1.3])
 
 with col1:
-    st.subheader("1. Posizione Geografica")
+    st.subheader("1. Località")
     m = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=5)
     folium.Marker([st.session_state.lat, st.session_state.lon]).add_to(m)
-    mappa = st_folium(m, height=350, use_container_width=True)
-    if mappa and mappa.get("last_clicked"):
-        st.session_state.lat, st.session_state.lon = mappa["last_clicked"]["lat"], mappa["last_clicked"]["lng"]
+    map_data = st_folium(m, height=300, use_container_width=True)
+    if map_data and map_data.get("last_clicked"):
+        st.session_state.lat, st.session_state.lon = map_data["last_clicked"]["lat"], map_data["last_clicked"]["lng"]
         st.rerun()
 
 with col2:
-    st.subheader("2. Parametri Impianto")
+    st.subheader("2. Setup Hardware")
+    tipo_pv = st.selectbox("Tecnologia FV:", ["Fisso (Ottimizzato)", "Insegue Inclinazione (E-W)", "Insegue Sole (N-S Inclinato)", "Asse Doppio"], index=0)
+    map_pv = {"Fisso (Ottimizzato)": 0, "Insegue Inclinazione (E-W)": 4, "Insegue Sole (N-S Inclinato)": 5, "Asse Doppio": 2}
     
-    # --- Menu Tracker Espanso ---
-    tipo_tracker_nome = st.selectbox("Tipologia Fotovoltaico:", [
-        "Fisso (Sud Ottimizzato)", 
-        "Insegue Inclinazione (Nord-Sud / Asse Est-Ovest)",
-        "Insegue Est-Ovest (Asse Nord-Sud Inclinato)", 
-        "Asse Doppio (Inseguitore Totale)"
-    ])
+    c1, c2, c3 = st.columns(3)
+    kw_fv = c1.number_input("FV (kWp)", 0.0, 50.0, 5.0)
+    kw_wind = c2.number_input("Eolico (kW)", 0.0, 50.0, 2.0)
+    kw_gen = c3.number_input("Generatore (kW)", 0.0, 50.0, 2.0)
     
-    if tipo_tracker_nome == "Fisso (Sud Ottimizzato)":
-        tracker = 0
-    elif tipo_tracker_nome == "Insegue Inclinazione (Nord-Sud / Asse Est-Ovest)":
-        tracker = 4
-    elif tipo_tracker_nome == "Insegue Est-Ovest (Asse Nord-Sud Inclinato)":
-        tracker = 5
-    else:
-        tracker = 2
-        
-    c1, c2 = st.columns(2)
-    with c1:
-        kw_fv = st.number_input("Fotovoltaico (kWp):", 0.0, 100.0, 5.0)
-        kw_backup = st.number_input("Generatore Backup (kW):", 0.0, 100.0, 1.0)
-        
-    with c2:
-        kw_wind = st.number_input("Eolico (kW):", 0.0, 100.0, 2.0)
-        kwh_batt = st.number_input("Batteria (kWh):", 0.0, 500.0, 20.0)
-        
-    st.markdown("---")
-    mwh_annui = st.number_input("Fabbisogno Annuo (MWh):", 0.0, 100.0, 8.76)
-    st.caption(f"💡 Equivale a un carico costante di **{(mwh_annui * 1000) / 8760:.2f} kW**")
+    kwh_batt = c1.number_input("Batteria (kWh)", 1.0, 200.0, 15.0)
+    mwh_anno = c2.number_input("MWh/anno richiesti", 0.1, 100.0, 8.76)
     
-    esegui = st.button("🚀 Avvia Simulazione", use_container_width=True, type="primary")
-
-st.divider()
+    st.subheader("3. Logica EMS (Soglie Batteria)")
+    s1, s2 = st.columns(2)
+    start_soc = s1.slider("Accendi Generatore al (%):", 5, 30, 15)
+    stop_soc = s2.slider("Spegni Generatore al (%):", 40, 95, 70)
+    
+    esegui = st.button("🚀 Simula Anno Completo", use_container_width=True, type="primary")
 
 if esegui:
-    with st.spinner("Scaricamento dati satellite e calcolo in corso..."):
-        df = scarica_profili_energia(st.session_state.lat, st.session_state.lon, tracker)
+    with st.spinner("Analisi satellitare in corso..."):
+        df = scarica_profili_energia(st.session_state.lat, st.session_state.lon, map_pv[tipo_pv])
         if df is not None:
-            w_carico = (mwh_annui * 1_000_000) / len(df)
-            res = esegui_simulazione(df, kw_fv, kw_wind, w_carico, kwh_batt*1000, kw_backup*1000)
+            w_carico = (mwh_anno * 1_000_000) / len(df)
+            res = esegui_simulazione_avanzata(df, kw_fv, kw_wind, w_carico, kwh_batt*1000, kw_gen*1000, start_soc, stop_soc)
             
-            st.subheader("📊 Risultati Annuali")
+            st.divider()
+            st.subheader("📊 Performance del Sistema")
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Autarchia Rinnovabile", f"{res['autarchia_rinnovabile']:.1f}%")
-            m2.metric("Copertura Totale", f"{res['copertura_totale']:.1f}%")
-            m3.metric("Accensioni Backup", f"{res['ore_backup']} ore")
-            m4.metric("Blackout Residui", f"{res['ore_blackout']} ore")
+            m1.metric("Autarchia Rinnovabile", f"{res['autarchia']:.1f}%")
+            m2.metric("Lavoro Generatore", f"{res['ore_gen']} ore")
+            m3.metric("Energia Generatore", f"{res['gen_kwh']:.0f} kWh")
+            m4.metric("Blackout", f"{res['ore_blackout']} ore")
             
-            st.markdown("---")
-            c1, c2, c3 = st.columns(3)
-            c1.write(f"**Produzione Rinnovabile:** {res['fv_kwh'] + res['eolico_kwh']:.0f} kWh")
-            c2.write(f"**Energia da Backup:** {res['backup_kwh']:.1f} kWh")
-            c3.write(f"**Energia Sprecata (Curtailment):** {res['tagliata_kwh']:.0f} kWh")
-            
-            st.subheader("🔋 Andamento della Carica della Batteria (365 giorni)")
-            df_plot = pd.DataFrame({"Data": df["Data_Ora"], "Carica (kWh)": [v/1000 for v in res["storia_soc"]]}).set_index("Data")
-            st.line_chart(df_plot, y="Carica (kWh)")
-            
-            if res['ore_blackout'] > 0:
-                st.error(f"⚠️ Attenzione: Nonostante il generatore da {kw_backup}kW, ci sono ancora {res['ore_blackout']} ore di blackout perché il carico richiesto in quelle ore supera la potenza che il generatore può erogare.")
+            st.subheader("🔋 Ciclo di Carica/Scarica Batteria")
+            df_plot = pd.DataFrame({"Data": df["Data_Ora"], "Batteria (kWh)": [v/1000 for v in res["storia_soc"]]}).set_index("Data")
+            st.line_chart(df_plot)
+            st.caption("Nota come il generatore 'riaggancia' la batteria verso l'alto quando tocca la soglia minima.")
