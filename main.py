@@ -32,10 +32,18 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
         "loss": 14.0,  
         "outputformat": "json", 
         "startyear": 2020, 
-        "endyear": 2020,
-        "trackingtype": tipo_tracker,
-        "optimalangles": 1  # <--- AGGIUNTO QUI PER TUTTI I TIPI DI IMPIANTO
+        "endyear": 2020
     }
+    
+    # Assegnazione corretta dei tracker e degli angoli ottimali
+    if tipo_tracker == 0:
+        params_pv["trackingtype"] = 0
+        params_pv["optimalangles"] = 1
+    elif tipo_tracker == 5:
+        params_pv["trackingtype"] = 5
+        params_pv["optimalangles"] = 1 # Ottimizza l'inclinazione dell'asse
+    else:
+        params_pv["trackingtype"] = tipo_tracker
         
     resp_pv = requests.get(url_pv, params=params_pv)
     if resp_pv.status_code != 200: return None
@@ -85,27 +93,23 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
         tot_fv_wh += p_fv
         tot_eolico_wh += p_wind
         
-        # 1. Copertura diretta
         copertura_diretta = min(p_rinnovabile, carico_w)
         carico_residuo = carico_w - copertura_diretta
         energia_eccedente = p_rinnovabile - copertura_diretta
         energia_da_rinnovabili_ora = copertura_diretta
         
-        # 2. Carica batteria (Curtailment registrato se piena)
         if energia_eccedente > 0:
             spazio = batteria_wh - soc
             energia_immessa = min(energia_eccedente, spazio)
             soc += energia_immessa
             energia_tagliata_wh += (energia_eccedente - energia_immessa)
             
-        # 3. Scarica batteria
         if carico_residuo > 0:
             prelievo_batt = min(soc, carico_residuo)
             soc -= prelievo_batt
             carico_residuo -= prelievo_batt
             energia_da_rinnovabili_ora += prelievo_batt
             
-        # 4. Intervento Generatore di Backup
         energia_fornita_backup_ora = 0.0
         if carico_residuo > 0 and p_backup_w > 0:
             ore_backup += 1
@@ -113,7 +117,6 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
             energia_backup_wh += energia_fornita_backup_ora
             carico_residuo -= energia_fornita_backup_ora
             
-        # 5. Blackout residuo
         if carico_residuo > 0.01:
             ore_blackout += 1
             
@@ -171,17 +174,31 @@ with col1:
 
 with col2:
     st.subheader("2. Parametri Impianto")
+    
+    # --- Menu Tracker Espanso ---
+    tipo_tracker_nome = st.selectbox("Tipologia Fotovoltaico:", [
+        "Fisso (Sud Ottimizzato)", 
+        "Insegue Inclinazione (Nord-Sud / Asse Est-Ovest)",
+        "Insegue Est-Ovest (Asse Nord-Sud Inclinato)", 
+        "Asse Doppio (Inseguitore Totale)"
+    ])
+    
+    if tipo_tracker_nome == "Fisso (Sud Ottimizzato)":
+        tracker = 0
+    elif tipo_tracker_nome == "Insegue Inclinazione (Nord-Sud / Asse Est-Ovest)":
+        tracker = 4
+    elif tipo_tracker_nome == "Insegue Est-Ovest (Asse Nord-Sud Inclinato)":
+        tracker = 5
+    else:
+        tracker = 2
+        
     c1, c2 = st.columns(2)
     with c1:
         kw_fv = st.number_input("Fotovoltaico (kWp):", 0.0, 100.0, 5.0)
-        tipo_tracker_nome = st.radio("Inseguitore FV:", ["Fisso (Ottimizzato)", "Asse Singolo Orizzontale"], horizontal=True)
-        tracker = 0 if tipo_tracker_nome == "Fisso (Ottimizzato)" else 1
         kw_backup = st.number_input("Generatore Backup (kW):", 0.0, 100.0, 1.0)
         
     with c2:
         kw_wind = st.number_input("Eolico (kW):", 0.0, 100.0, 2.0)
-        st.caption(" ") 
-        st.caption(" ") 
         kwh_batt = st.number_input("Batteria (kWh):", 0.0, 500.0, 20.0)
         
     st.markdown("---")
@@ -199,7 +216,6 @@ if esegui:
             w_carico = (mwh_annui * 1_000_000) / len(df)
             res = esegui_simulazione(df, kw_fv, kw_wind, w_carico, kwh_batt*1000, kw_backup*1000)
             
-            # --- METRICHE ---
             st.subheader("📊 Risultati Annuali")
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Autarchia Rinnovabile", f"{res['autarchia_rinnovabile']:.1f}%")
@@ -213,7 +229,6 @@ if esegui:
             c2.write(f"**Energia da Backup:** {res['backup_kwh']:.1f} kWh")
             c3.write(f"**Energia Sprecata (Curtailment):** {res['tagliata_kwh']:.0f} kWh")
             
-            # --- GRAFICO ---
             st.subheader("🔋 Andamento della Carica della Batteria (365 giorni)")
             df_plot = pd.DataFrame({"Data": df["Data_Ora"], "Carica (kWh)": [v/1000 for v in res["storia_soc"]]}).set_index("Data")
             st.line_chart(df_plot, y="Carica (kWh)")
