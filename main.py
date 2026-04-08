@@ -22,7 +22,7 @@ def calcola_potenza_eolica(v_vento_ms, p_nominale_w=1000.0):
 
 @st.cache_data(show_spinner=False)
 def scarica_profili_energia(lat, lon, tipo_tracker):
-    # 1. FOTOVOLTAICO (PVGIS)
+    # 1. FOTOVOLTAICO (PVGIS) - SCARICHIAMO 4 ANNI (2017-2020)
     url_pv = "https://re.jrc.ec.europa.eu/api/v5_2/seriescalc"
     params_pv = {
         "lat": lat, 
@@ -31,11 +31,10 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
         "peakpower": 1.0, 
         "loss": 14.0,  
         "outputformat": "json", 
-        "startyear": 2020, 
-        "endyear": 2020
+        "startyear": 2017, # <--- Modificato qui
+        "endyear": 2020    # <--- Modificato qui
     }
     
-    # Assegnazione corretta dei tracker e degli angoli ottimali
     if tipo_tracker == 0:
         params_pv["trackingtype"] = 0
         params_pv["optimalangles"] = 1
@@ -54,11 +53,12 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     df_pv.rename(columns={'P': 'FV_1kW_W'}, inplace=True)
     df_pv = df_pv[['Data_Ora', 'FV_1kW_W']]
     
-    # 2. VENTO (Open-Meteo)
+    # 2. VENTO (Open-Meteo) - SCARICHIAMO GLI STESSI 4 ANNI
     url_wind = "https://archive-api.open-meteo.com/v1/archive"
     params_wind = {
         "latitude": lat, "longitude": lon,
-        "start_date": "2020-01-01", "end_date": "2020-12-31",
+        "start_date": "2017-01-01", # <--- Modificato qui
+        "end_date": "2020-12-31",   # <--- Modificato qui
         "hourly": "windspeed_100m", "wind_speed_unit": "ms", "timezone": "UTC"
     }
     resp_wind = requests.get(url_wind, params=params_wind)
@@ -153,7 +153,11 @@ with st.expander("ℹ️ Come funziona questo simulatore?"):
     st.markdown("""
     **Come funziona questo simulatore?**
     
-    Questo strumento avanzato simula il bilancio energetico orario di un impianto ibrido completamente off-grid (staccato dalla rete) per un intero anno. Il motore di calcolo analizza l'interazione tra fonti rinnovabili, accumulo e back-up seguendo questa rigida logica di priorità:
+    Questo strumento avanzato simula il bilancio energetico orario di un impianto ibrido completamente off-grid (staccato dalla rete). 
+    A differenza delle simulazioni classiche su un singolo anno, questo modello elabora **4 anni consecutivi (circa 35.000 ore dal 2017 al 2020)** per testare la tenuta del sistema anche di fronte ad annate metereologicamente "sfortunate" e inverni particolarmente rigidi. 
+    I risultati finali sono poi calcolati come media annua per una facile lettura.
+
+    Il motore di calcolo analizza l'interazione tra fonti rinnovabili, accumulo e back-up seguendo questa rigida logica di priorità:
 
     1. **Autoconsumo Diretto:** Il sistema dà sempre la priorità all'uso diretto dell'energia prodotta in quell'istante da **Sole e Vento** per alimentare i consumi.
     2. **Accumulo e Curtailment:** Se la produzione rinnovabile supera la domanda, l'energia eccedente carica la **Batteria**. Quando la batteria raggiunge il 100%, l'ulteriore energia prodotta non può essere stoccata e viene inevitabilmente "scartata" o sprecata (fenomeno noto come *Curtailment*).
@@ -219,17 +223,14 @@ with col2:
     mwh_annui = st.number_input("Fabbisogno Annuo (MWh):", 0.0, 100.0, 8.76)
     st.caption(f"💡 Equivale a un carico costante di **{(mwh_annui * 1000) / 8760:.2f} kW**")
 
-# --- NUOVA SEZIONE: ANALISI ECONOMICA IN TEMPO REALE ---
 st.divider()
 st.subheader("💰 Stima Investimento Iniziale (CAPEX)")
 
-# Calcoli economici
 costo_fv = kw_fv * 500.0
 costo_wind = kw_wind * 1000.0
 costo_batt = kwh_batt * 80.0
 costo_totale = costo_fv + costo_wind + costo_batt
 
-# Formattazione per mostrare i punti delle migliaia in stile europeo
 def format_euro(cifra):
     return f"€ {cifra:,.0f}".replace(",", ".")
 
@@ -242,33 +243,41 @@ col_c4.metric("TOTALE IMPIANTO", format_euro(costo_totale))
 st.caption("*Nota: Il costo del generatore di backup, degli inverter, del cablaggio e dell'installazione non sono inclusi in questa stima.*")
     
 st.markdown("<br>", unsafe_allow_html=True)
-esegui = st.button("🚀 Avvia Simulazione Energetica", use_container_width=True, type="primary")
+esegui = st.button("🚀 Avvia Simulazione Energetica (Analisi 4 Anni)", use_container_width=True, type="primary")
 
 st.divider()
 
 if esegui:
-    with st.spinner("Scaricamento dati satellite e calcolo in corso..."):
+    with st.spinner("Scaricamento dati 2017-2020 e simulazione di 35.000 ore in corso..."):
         df = scarica_profili_energia(st.session_state.lat, st.session_state.lon, tracker)
         if df is not None:
-            w_carico = (mwh_annui * 1_000_000) / len(df)
+            # Calcoliamo quanti anni effettivi abbiamo scaricato (4 anni = circa 4.004 a causa degli anni bisestili)
+            anni_simulati = len(df) / 8760.0
+            
+            # Il carico orario si basa sulle ore effettive di 4 anni per mantenere coerente il bilancio
+            w_carico = (mwh_annui * 1_000_000) / (len(df) / anni_simulati) 
+            
             res = esegui_simulazione(df, kw_fv, kw_wind, w_carico, kwh_batt*1000, kw_backup*1000)
             
-            st.subheader("📊 Risultati Annuali")
+            st.subheader("📊 Risultati (Valori medi annui basati su un ciclo di 4 anni)")
             m1, m2, m3, m4 = st.columns(4)
+            # Le percentuali valgono sull'intero periodo
             m1.metric("Autarchia Rinnovabile", f"{res['autarchia_rinnovabile']:.1f}%")
             m2.metric("Copertura Totale", f"{res['copertura_totale']:.1f}%")
-            m3.metric("Accensioni Backup", f"{res['ore_backup']} ore")
-            m4.metric("Blackout Residui", f"{res['ore_blackout']} ore")
+            
+            # Le ore assolute vengono divise per i 4 anni
+            m3.metric("Accensioni Backup", f"{res['ore_backup'] / anni_simulati:.0f} ore/anno")
+            m4.metric("Blackout Residui", f"{res['ore_blackout'] / anni_simulati:.0f} ore/anno")
             
             st.markdown("---")
             c1, c2, c3 = st.columns(3)
-            c1.write(f"**Produzione Rinnovabile:** {res['fv_kwh'] + res['eolico_kwh']:.0f} kWh")
-            c2.write(f"**Energia da Backup:** {res['backup_kwh']:.1f} kWh")
-            c3.write(f"**Energia Sprecata (Curtailment):** {res['tagliata_kwh']:.0f} kWh")
+            c1.write(f"**Produzione Rinnovabile Media:** {(res['fv_kwh'] + res['eolico_kwh']) / anni_simulati:.0f} kWh/anno")
+            c2.write(f"**Energia da Backup Media:** {res['backup_kwh'] / anni_simulati:.1f} kWh/anno")
+            c3.write(f"**Energia Sprecata Media:** {res['tagliata_kwh'] / anni_simulati:.0f} kWh/anno")
             
-            st.subheader("🔋 Andamento della Carica della Batteria (365 giorni)")
+            st.subheader("🔋 Andamento della Carica della Batteria (dal 2017 al 2020)")
             df_plot = pd.DataFrame({"Data": df["Data_Ora"], "Carica (kWh)": [v/1000 for v in res["storia_soc"]]}).set_index("Data")
             st.line_chart(df_plot, y="Carica (kWh)")
             
             if res['ore_blackout'] > 0:
-                st.error(f"⚠️ Attenzione: Nonostante il generatore da {kw_backup}kW, ci sono ancora {res['ore_blackout']} ore di blackout perché il carico richiesto in quelle ore supera la potenza che il generatore può erogare.")
+                st.error(f"⚠️ Attenzione: Nonostante il generatore da {kw_backup}kW, il sistema ha subito una media di {res['ore_blackout'] / anni_simulati:.0f} ore di blackout all'anno perché il carico richiesto in quelle ore superava la potenza massima del generatore.")
