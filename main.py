@@ -41,7 +41,7 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
         params_pv["optimalangles"] = 1
     elif tipo_tracker == 5:
         params_pv["trackingtype"] = 5
-        params_pv["optimalangles"] = 1 # Ottimizza l'inclinazione dell'asse
+        params_pv["optimalangles"] = 1 
     else:
         params_pv["trackingtype"] = tipo_tracker
         
@@ -175,7 +175,6 @@ with col1:
 with col2:
     st.subheader("2. Parametri Impianto")
     
-    # --- Menu Tracker ---
     tipo_tracker_nome = st.selectbox("Tipologia Fotovoltaico:", [
         "Fisso (Sud Ottimizzato)", 
         "Insegue Inclinazione (Nord-Sud / Asse Est-Ovest)",
@@ -204,8 +203,31 @@ with col2:
     st.markdown("---")
     mwh_annui = st.number_input("Fabbisogno Annuo (MWh):", 0.0, 100.0, 8.76)
     st.caption(f"💡 Equivale a un carico costante di **{(mwh_annui * 1000) / 8760:.2f} kW**")
+
+# --- NUOVA SEZIONE: ANALISI ECONOMICA IN TEMPO REALE ---
+st.divider()
+st.subheader("💰 Stima Investimento Iniziale (CAPEX)")
+
+# Calcoli economici
+costo_fv = kw_fv * 500.0
+costo_wind = kw_wind * 1000.0
+costo_batt = kwh_batt * 80.0
+costo_totale = costo_fv + costo_wind + costo_batt
+
+# Formattazione per mostrare i punti delle migliaia in stile europeo
+def format_euro(cifra):
+    return f"€ {cifra:,.0f}".replace(",", ".")
+
+col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+col_c1.metric("Pannelli FV (500 €/kW)", format_euro(costo_fv))
+col_c2.metric("Turbina Eolica (1000 €/kW)", format_euro(costo_wind))
+col_c3.metric("Batterie (80 €/kWh)", format_euro(costo_batt))
+col_c4.metric("TOTALE IMPIANTO", format_euro(costo_totale))
+
+st.caption("*Nota: Il costo del generatore di backup, degli inverter, del cablaggio e dell'installazione non sono inclusi in questa stima.*")
     
-    esegui = st.button("🚀 Avvia Simulazione", use_container_width=True, type="primary")
+st.markdown("<br>", unsafe_allow_html=True)
+esegui = st.button("🚀 Avvia Simulazione Energetica", use_container_width=True, type="primary")
 
 st.divider()
 
