@@ -22,7 +22,7 @@ def calcola_potenza_eolica(v_vento_ms, p_nominale_w=1000.0):
 
 @st.cache_data(show_spinner=False)
 def scarica_profili_energia(lat, lon, tipo_tracker):
-    # 1. FOTOVOLTAICO (PVGIS) - SCARICHIAMO 4 ANNI (2017-2020)
+    # 1. FOTOVOLTAICO (PVGIS) - 2017-2020
     url_pv = "https://re.jrc.ec.europa.eu/api/v5_2/seriescalc"
     params_pv = {
         "lat": lat, 
@@ -31,8 +31,8 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
         "peakpower": 1.0, 
         "loss": 14.0,  
         "outputformat": "json", 
-        "startyear": 2017, # <--- Modificato qui
-        "endyear": 2020    # <--- Modificato qui
+        "startyear": 2017, 
+        "endyear": 2020    
     }
     
     if tipo_tracker == 0:
@@ -53,12 +53,12 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     df_pv.rename(columns={'P': 'FV_1kW_W'}, inplace=True)
     df_pv = df_pv[['Data_Ora', 'FV_1kW_W']]
     
-    # 2. VENTO (Open-Meteo) - SCARICHIAMO GLI STESSI 4 ANNI
+    # 2. VENTO (Open-Meteo) - 2017-2020
     url_wind = "https://archive-api.open-meteo.com/v1/archive"
     params_wind = {
         "latitude": lat, "longitude": lon,
-        "start_date": "2017-01-01", # <--- Modificato qui
-        "end_date": "2020-12-31",   # <--- Modificato qui
+        "start_date": "2017-01-01", 
+        "end_date": "2020-12-31",   
         "hourly": "windspeed_100m", "wind_speed_unit": "ms", "timezone": "UTC"
     }
     resp_wind = requests.get(url_wind, params=params_wind)
@@ -84,44 +84,72 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
     energia_fornita_rinnovabili_wh = 0.0
     tot_fv_wh = 0.0
     tot_eolico_wh = 0.0
-    storia_soc = []
+    
+    # Nuove liste per il grafico della scomposizione del carico
+    storia_fv_usato = []
+    storia_wind_usato = []
+    storia_batt_usata = []
+    storia_gen_usato = []
+    storia_blackout = []
     
     for _, row in df_energia.iterrows():
         p_fv = row['FV_1kW_W'] * mult_fv
         p_wind = row['Eolico_1kW_W'] * mult_eolico
         p_rinnovabile = p_fv + p_wind
+        
         tot_fv_wh += p_fv
         tot_eolico_wh += p_wind
         
+        # 1. Quanta energia rinnovabile usiamo direttamente?
         copertura_diretta = min(p_rinnovabile, carico_w)
         carico_residuo = carico_w - copertura_diretta
         energia_eccedente = p_rinnovabile - copertura_diretta
         energia_da_rinnovabili_ora = copertura_diretta
         
+        # Ripartizione equa e proporzionale per il grafico
+        if p_rinnovabile > 0:
+            fv_diretto = copertura_diretta * (p_fv / p_rinnovabile)
+            wind_diretto = copertura_diretta * (p_wind / p_rinnovabile)
+        else:
+            fv_diretto, wind_diretto = 0.0, 0.0
+            
+        # 2. Carica della batteria
         if energia_eccedente > 0:
             spazio = batteria_wh - soc
             energia_immessa = min(energia_eccedente, spazio)
             soc += energia_immessa
             energia_tagliata_wh += (energia_eccedente - energia_immessa)
             
+        # 3. Prelievo dalla batteria
+        batt_usata_ora = 0.0
         if carico_residuo > 0:
-            prelievo_batt = min(soc, carico_residuo)
-            soc -= prelievo_batt
-            carico_residuo -= prelievo_batt
-            energia_da_rinnovabili_ora += prelievo_batt
+            batt_usata_ora = min(soc, carico_residuo)
+            soc -= batt_usata_ora
+            carico_residuo -= batt_usata_ora
+            energia_da_rinnovabili_ora += batt_usata_ora
             
-        energia_fornita_backup_ora = 0.0
+        # 4. Generatore di Backup
+        gen_usato_ora = 0.0
         if carico_residuo > 0 and p_backup_w > 0:
             ore_backup += 1
-            energia_fornita_backup_ora = min(p_backup_w, carico_residuo)
-            energia_backup_wh += energia_fornita_backup_ora
-            carico_residuo -= energia_fornita_backup_ora
+            gen_usato_ora = min(p_backup_w, carico_residuo)
+            energia_backup_wh += gen_usato_ora
+            carico_residuo -= gen_usato_ora
             
+        # 5. Blackout finale
+        blackout_ora = 0.0
         if carico_residuo > 0.01:
             ore_blackout += 1
+            blackout_ora = carico_residuo
             
         energia_fornita_rinnovabili_wh += energia_da_rinnovabili_ora
-        storia_soc.append(soc)
+        
+        # Salviamo i dati per il grafico (in Wattora)
+        storia_fv_usato.append(fv_diretto)
+        storia_wind_usato.append(wind_diretto)
+        storia_batt_usata.append(batt_usata_ora)
+        storia_gen_usato.append(gen_usato_ora)
+        storia_blackout.append(blackout_ora)
 
     richiesta_totale_wh = carico_w * ore_totali
     autarchia_rinnovabile = (energia_fornita_rinnovabili_wh / richiesta_totale_wh) * 100 if richiesta_totale_wh > 0 else 100.0
@@ -139,7 +167,11 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
         "eolico_kwh": tot_eolico_wh / 1000,
         "richiesta_kwh": richiesta_totale_wh / 1000,
         "tagliata_kwh": energia_tagliata_wh / 1000,
-        "storia_soc": storia_soc
+        "storia_fv": storia_fv_usato,
+        "storia_wind": storia_wind_usato,
+        "storia_batt": storia_batt_usata,
+        "storia_gen": storia_gen_usato,
+        "storia_blackout": storia_blackout
     }
 
 # ==========================================
@@ -251,21 +283,15 @@ if esegui:
     with st.spinner("Scaricamento dati 2017-2020 e simulazione di 35.000 ore in corso..."):
         df = scarica_profili_energia(st.session_state.lat, st.session_state.lon, tracker)
         if df is not None:
-            # Calcoliamo quanti anni effettivi abbiamo scaricato (4 anni = circa 4.004 a causa degli anni bisestili)
             anni_simulati = len(df) / 8760.0
-            
-            # Il carico orario si basa sulle ore effettive di 4 anni per mantenere coerente il bilancio
             w_carico = (mwh_annui * 1_000_000) / (len(df) / anni_simulati) 
             
             res = esegui_simulazione(df, kw_fv, kw_wind, w_carico, kwh_batt*1000, kw_backup*1000)
             
             st.subheader("📊 Risultati (Valori medi annui basati su un ciclo di 4 anni)")
             m1, m2, m3, m4 = st.columns(4)
-            # Le percentuali valgono sull'intero periodo
             m1.metric("Autarchia Rinnovabile", f"{res['autarchia_rinnovabile']:.1f}%")
             m2.metric("Copertura Totale", f"{res['copertura_totale']:.1f}%")
-            
-            # Le ore assolute vengono divise per i 4 anni
             m3.metric("Accensioni Backup", f"{res['ore_backup'] / anni_simulati:.0f} ore/anno")
             m4.metric("Blackout Residui", f"{res['ore_blackout'] / anni_simulati:.0f} ore/anno")
             
@@ -275,9 +301,25 @@ if esegui:
             c2.write(f"**Energia da Backup Media:** {res['backup_kwh'] / anni_simulati:.1f} kWh/anno")
             c3.write(f"**Energia Sprecata Media:** {res['tagliata_kwh'] / anni_simulati:.0f} kWh/anno")
             
-            st.subheader("🔋 Andamento della Carica della Batteria (dal 2017 al 2020)")
-            df_plot = pd.DataFrame({"Data": df["Data_Ora"], "Carica (kWh)": [v/1000 for v in res["storia_soc"]]}).set_index("Data")
-            st.line_chart(df_plot, y="Carica (kWh)")
+            st.markdown("---")
+            st.subheader("📊 Copertura del Carico (Aggregata per Giornata)")
+            st.caption("Questo grafico a barre mostra da dove proviene l'energia utilizzata in ogni singolo giorno dei 4 anni simulati. Il 'tetto' piatto in alto rappresenta il tuo fabbisogno costante.")
+            
+            # Creazione del dataframe per il grafico
+            df_barre = pd.DataFrame({
+                "Data": df["Data_Ora"],
+                "Sole (Diretto)": res["storia_fv"],
+                "Vento (Diretto)": res["storia_wind"],
+                "Batteria (Scarica)": res["storia_batt"],
+                "Generatore Backup": res["storia_gen"],
+                "Blackout (Non Coperto)": res["storia_blackout"]
+            }).set_index("Data")
+            
+            # Raggruppiamo i dati sommando i Wattora di ogni singola ora per creare un consumo Giornaliero totale in kWh
+            df_giornaliero = df_barre.resample('D').sum() / 1000.0
+            
+            # Streamlit bar_chart impila automaticamente le colonne multiple
+            st.bar_chart(df_giornaliero)
             
             if res['ore_blackout'] > 0:
                 st.error(f"⚠️ Attenzione: Nonostante il generatore da {kw_backup}kW, il sistema ha subito una media di {res['ore_blackout'] / anni_simulati:.0f} ore di blackout all'anno perché il carico richiesto in quelle ore superava la potenza massima del generatore.")
