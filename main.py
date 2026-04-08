@@ -25,17 +25,17 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     # 1. FOTOVOLTAICO (PVGIS)
     url_pv = "https://re.jrc.ec.europa.eu/api/v5_2/seriescalc"
     params_pv = {
-        "lat": lat, "lon": lon, "pvcalculation": 1,
-        "peakpower": 1.0, "loss": 14.0,  
-        "outputformat": "json", "startyear": 2020, "endyear": 2020
+        "lat": lat, 
+        "lon": lon, 
+        "pvcalculation": 1,
+        "peakpower": 1.0, 
+        "loss": 14.0,  
+        "outputformat": "json", 
+        "startyear": 2020, 
+        "endyear": 2020,
+        "trackingtype": tipo_tracker,
+        "optimalangles": 1  # <--- AGGIUNTO QUI PER TUTTI I TIPI DI IMPIANTO
     }
-    
-    # Gestione ottimizzata dei tracker
-    if tipo_tracker == 0:
-        params_pv["trackingtype"] = 0
-        params_pv["optimalangles"] = 1 # Ottimizza automaticamente inclinazione e orientamento
-    else:
-        params_pv["trackingtype"] = tipo_tracker
         
     resp_pv = requests.get(url_pv, params=params_pv)
     if resp_pv.status_code != 200: return None
@@ -135,7 +135,7 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
         "fv_kwh": tot_fv_wh / 1000,
         "eolico_kwh": tot_eolico_wh / 1000,
         "richiesta_kwh": richiesta_totale_wh / 1000,
-        "tagliata_kwh": energia_tagliata_wh / 1000, # Aggiunto per evitare il KeyError!
+        "tagliata_kwh": energia_tagliata_wh / 1000,
         "storia_soc": storia_soc
     }
 
@@ -180,8 +180,8 @@ with col2:
         
     with c2:
         kw_wind = st.number_input("Eolico (kW):", 0.0, 100.0, 2.0)
-        st.caption(" ") # Spaziatura
-        st.caption(" ") # Spaziatura
+        st.caption(" ") 
+        st.caption(" ") 
         kwh_batt = st.number_input("Batteria (kWh):", 0.0, 500.0, 20.0)
         
     st.markdown("---")
