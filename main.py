@@ -150,7 +150,6 @@ st.set_page_config(page_title="Simulatore Ibrido con Backup", layout="wide")
 st.title("🔋 Simulatore Ibrido: Rinnovabili + Batteria + Backup")
 
 with st.expander("ℹ️ Come funziona questo simulatore?"):
-    with st.expander("ℹ️ Come funziona questo simulatore?"):
     st.markdown("""
     **Come funziona questo simulatore?**
     
@@ -167,13 +166,14 @@ with st.expander("ℹ️ Come funziona questo simulatore?"):
     **⚠️ Disclaimer importante sull'Eolico**
     I profili di produzione eolica generati da questo simulatore utilizzano dati storici del vento misurati a **100 metri di altezza**. 
     Questo significa che il modello matematico riflette le altissime efficienze di una **grande turbina eolica di taglia industriale**, e non quelle (spesso deludenti) di un impianto micro-eolico domestico montato sul tetto. 
-    Inserire "2 kW" di eolico nei parametri non equivale a installare una piccola elica in giardino, ma simula piuttosto il possesso di una **quota parte (un "pezzetto" condiviso)** di un grande impianto eolico.
+    Inserire "2 kW" di eolico nei parametri non equivale a installare una piccola elica in giardino, ma simula piuttosto il possesso di una **quota parte (un "pezzetto" condiviso)** di un grande impianto eolico professionale.
 
     ---
 
     ✉️ **Contatti**
     Per info, suggerimenti o per discutere dell'impatto climatico ed energetico di queste simulazioni, puoi scrivermi a: **giovanni@unbelclima.it**
     """)
+
 if "lat" not in st.session_state: st.session_state.lat, st.session_state.lon = 45.4642, 9.1900
 
 col1, col2 = st.columns([1, 1.2])
