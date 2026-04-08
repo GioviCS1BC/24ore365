@@ -150,15 +150,30 @@ st.set_page_config(page_title="Simulatore Ibrido con Backup", layout="wide")
 st.title("🔋 Simulatore Ibrido: Rinnovabili + Batteria + Backup")
 
 with st.expander("ℹ️ Come funziona questo simulatore?"):
+    with st.expander("ℹ️ Come funziona questo simulatore?"):
     st.markdown("""
-    Questo strumento simula un impianto off-grid con generatore di emergenza su base annuale.
-    1. Il sistema dà priorità all'uso diretto di **Sole e Vento**.
-    2. L'energia eccedente carica la **Batteria**. L'eventuale ulteriore eccesso viene scartato (Curtailment).
-    3. Quando la produzione cala, si attinge alla Batteria.
-    4. Se la batteria è vuota, si accende il **Generatore di Backup** (fino alla potenza massima impostata).
-    5. Se il carico richiesto è superiore alla potenza del generatore, si verifica un **Blackout parziale o totale**.
-    """)
+    **Come funziona questo simulatore?**
+    
+    Questo strumento avanzato simula il bilancio energetico orario di un impianto ibrido completamente off-grid (staccato dalla rete) per un intero anno. Il motore di calcolo analizza l'interazione tra fonti rinnovabili, accumulo e back-up seguendo questa rigida logica di priorità:
 
+    1. **Autoconsumo Diretto:** Il sistema dà sempre la priorità all'uso diretto dell'energia prodotta in quell'istante da **Sole e Vento** per alimentare i consumi.
+    2. **Accumulo e Curtailment:** Se la produzione rinnovabile supera la domanda, l'energia eccedente carica la **Batteria**. Quando la batteria raggiunge il 100%, l'ulteriore energia prodotta non può essere stoccata e viene inevitabilmente "scartata" o sprecata (fenomeno noto come *Curtailment*).
+    3. **Prelievo dall'Accumulo:** Quando la produzione da sole e vento cala (es. di notte o in assenza di vento), il sistema attinge l'energia mancante dalla Batteria.
+    4. **Intervento del Generatore:** Se la batteria si svuota completamente, si accende il **Generatore di Backup** come "scialuppa di salvataggio". Il generatore fornirà energia fino al limite della potenza massima che gli hai assegnato.
+    5. **Blackout:** Se il carico richiesto in un determinato momento è superiore alla potenza massima che il generatore è in grado di erogare, il sistema non regge e si verifica un **Blackout (parziale o totale)**.
+
+    ---
+
+    **⚠️ Disclaimer importante sull'Eolico**
+    I profili di produzione eolica generati da questo simulatore utilizzano dati storici del vento misurati a **100 metri di altezza**. 
+    Questo significa che il modello matematico riflette le altissime efficienze di una **grande turbina eolica di taglia industriale**, e non quelle (spesso deludenti) di un impianto micro-eolico domestico montato sul tetto. 
+    Inserire "2 kW" di eolico nei parametri non equivale a installare una piccola elica in giardino, ma simula piuttosto il possesso di una **quota parte (un "pezzetto" condiviso)** di un grande impianto eolico.
+
+    ---
+
+    ✉️ **Contatti**
+    Per info, suggerimenti o per discutere dell'impatto climatico ed energetico di queste simulazioni, puoi scrivermi a: **giovanni@unbelclima.it**
+    """)
 if "lat" not in st.session_state: st.session_state.lat, st.session_state.lon = 45.4642, 9.1900
 
 col1, col2 = st.columns([1, 1.2])
