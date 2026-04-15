@@ -9,7 +9,7 @@ from streamlit_folium import st_folium
 # ==========================================
 
 def calcola_potenza_eolica(v_vento_ms, p_nominale_w=1000.0):
-    v_cut_in = 3.0    
+    v_cut_in = 1.0    
     v_rated = 12.0    
     v_cut_out = 25.0  
     
