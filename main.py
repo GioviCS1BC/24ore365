@@ -74,23 +74,21 @@ def scarica_profili_energia(lat, lon, tipo_tracker):
     
     return pd.merge(df_pv, df_wind, on='Data_Ora', how='inner')
 
-def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, p_backup_w):
+def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, p_backup_w, perc_carico_fondamentale):
     ore_totali = len(df_energia)
     soc = 0.0  
     ore_backup = 0
     ore_blackout = 0
+    ore_riduzione_carico = 0
     energia_tagliata_wh = 0.0      
     energia_backup_wh = 0.0
     energia_fornita_rinnovabili_wh = 0.0
     tot_fv_wh = 0.0
     tot_eolico_wh = 0.0
+    richiesta_effettiva_totale_wh = 0.0
     
-    # Nuove liste per il grafico della scomposizione del carico
-    storia_fv_usato = []
-    storia_wind_usato = []
-    storia_batt_usata = []
-    storia_gen_usato = []
-    storia_blackout = []
+    # Lista per il grafico della percentuale
+    storia_perc_rinnovabili = []
     
     for _, row in df_energia.iterrows():
         p_fv = row['FV_1kW_W'] * mult_fv
@@ -100,18 +98,22 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
         tot_fv_wh += p_fv
         tot_eolico_wh += p_wind
         
+        # --- GESTIONE CARICO FONDAMENTALE ---
+        carico_effettivo_w = carico_w
+        capacita_disponibile = p_rinnovabile + soc + p_backup_w
+        
+        # Se l'energia non basta per tutto il carico e abbiamo impostato un limite di emergenza
+        if capacita_disponibile < carico_w and perc_carico_fondamentale < 100.0:
+            carico_effettivo_w = carico_w * (perc_carico_fondamentale / 100.0)
+            ore_riduzione_carico += 1
+            
+        richiesta_effettiva_totale_wh += carico_effettivo_w
+        
         # 1. Quanta energia rinnovabile usiamo direttamente?
-        copertura_diretta = min(p_rinnovabile, carico_w)
-        carico_residuo = carico_w - copertura_diretta
+        copertura_diretta = min(p_rinnovabile, carico_effettivo_w)
+        carico_residuo = carico_effettivo_w - copertura_diretta
         energia_eccedente = p_rinnovabile - copertura_diretta
         energia_da_rinnovabili_ora = copertura_diretta
-        
-        # Ripartizione equa e proporzionale per il grafico
-        if p_rinnovabile > 0:
-            fv_diretto = copertura_diretta * (p_fv / p_rinnovabile)
-            wind_diretto = copertura_diretta * (p_wind / p_rinnovabile)
-        else:
-            fv_diretto, wind_diretto = 0.0, 0.0
             
         # 2. Carica della batteria
         if energia_eccedente > 0:
@@ -137,41 +139,32 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
             carico_residuo -= gen_usato_ora
             
         # 5. Blackout finale
-        blackout_ora = 0.0
         if carico_residuo > 0.01:
             ore_blackout += 1
-            blackout_ora = carico_residuo
             
         energia_fornita_rinnovabili_wh += energia_da_rinnovabili_ora
         
-        # Salviamo i dati per il grafico (in Wattora)
-        storia_fv_usato.append(fv_diretto)
-        storia_wind_usato.append(wind_diretto)
-        storia_batt_usata.append(batt_usata_ora)
-        storia_gen_usato.append(gen_usato_ora)
-        storia_blackout.append(blackout_ora)
+        # Calcolo della percentuale di rinnovabili in quest'ora
+        perc_rinnovabile = (energia_da_rinnovabili_ora / carico_effettivo_w) * 100 if carico_effettivo_w > 0 else 100.0
+        storia_perc_rinnovabili.append(perc_rinnovabile)
 
-    richiesta_totale_wh = carico_w * ore_totali
-    autarchia_rinnovabile = (energia_fornita_rinnovabili_wh / richiesta_totale_wh) * 100 if richiesta_totale_wh > 0 else 100.0
-    copertura_totale = ((energia_fornita_rinnovabili_wh + energia_backup_wh) / richiesta_totale_wh) * 100 if richiesta_totale_wh > 0 else 100.0
+    autarchia_rinnovabile = (energia_fornita_rinnovabili_wh / richiesta_effettiva_totale_wh) * 100 if richiesta_effettiva_totale_wh > 0 else 100.0
+    copertura_totale = ((energia_fornita_rinnovabili_wh + energia_backup_wh) / richiesta_effettiva_totale_wh) * 100 if richiesta_effettiva_totale_wh > 0 else 100.0
     curtailment = (energia_tagliata_wh / (tot_fv_wh + tot_eolico_wh)) * 100 if (tot_fv_wh + tot_eolico_wh) > 0 else 0.0
     
     return {
         "ore_backup": ore_backup,
         "ore_blackout": ore_blackout,
+        "ore_riduzione_carico": ore_riduzione_carico,
         "autarchia_rinnovabile": autarchia_rinnovabile,
         "copertura_totale": copertura_totale,
         "curtailment": curtailment,
         "backup_kwh": energia_backup_wh / 1000,
         "fv_kwh": tot_fv_wh / 1000,
         "eolico_kwh": tot_eolico_wh / 1000,
-        "richiesta_kwh": richiesta_totale_wh / 1000,
+        "richiesta_kwh": richiesta_effettiva_totale_wh / 1000,
         "tagliata_kwh": energia_tagliata_wh / 1000,
-        "storia_fv": storia_fv_usato,
-        "storia_wind": storia_wind_usato,
-        "storia_batt": storia_batt_usata,
-        "storia_gen": storia_gen_usato,
-        "storia_blackout": storia_blackout
+        "storia_perc_rinnovabili": storia_perc_rinnovabili
     }
 
 # ==========================================
@@ -194,15 +187,9 @@ with st.expander("ℹ️ Come funziona questo simulatore?"):
     1. **Autoconsumo Diretto:** Il sistema dà sempre la priorità all'uso diretto dell'energia prodotta in quell'istante da **Sole e Vento** per alimentare i consumi.
     2. **Accumulo e Curtailment:** Se la produzione rinnovabile supera la domanda, l'energia eccedente carica la **Batteria**. Quando la batteria raggiunge il 100%, l'ulteriore energia prodotta non può essere stoccata e viene inevitabilmente "scartata" o sprecata (fenomeno noto come *Curtailment*).
     3. **Prelievo dall'Accumulo:** Quando la produzione da sole e vento cala (es. di notte o in assenza di vento), il sistema attinge l'energia mancante dalla Batteria.
-    4. **Intervento del Generatore:** Se la batteria si svuota completamente, si accende il **Generatore di Backup** come "scialuppa di salvataggio". Il generatore fornirà energia fino al limite della potenza massima che gli hai assegnato.
-    5. **Blackout:** Se il carico richiesto in un determinato momento è superiore alla potenza massima che il generatore è in grado di erogare, il sistema non regge e si verifica un **Blackout (parziale o totale)**.
-
-    ---
-
-    **⚠️ Disclaimer importante sull'Eolico**
-    I profili di produzione eolica generati da questo simulatore utilizzano dati storici del vento misurati a **100 metri di altezza**. 
-    Questo significa che il modello matematico riflette le altissime efficienze di una **grande turbina eolica di taglia industriale**, e non quelle (spesso deludenti) di un impianto micro-eolico domestico montato sul tetto. 
-    Inserire "2 kW" di eolico nei parametri non equivale a installare una piccola elica in giardino, ma simula piuttosto il possesso di una **quota parte (un "pezzetto" condiviso)** di un grande impianto eolico professionale.
+    4. **Riduzione Carico (Load Shedding):** Se l'energia disponibile (rinnovabili + batteria + generatore) è inferiore alla domanda totale, il sistema disattiva i carichi non prioritari riducendo la domanda alla sola quota del **Carico Fondamentale**.
+    5. **Intervento del Generatore:** Se la batteria si svuota completamente, si accende il **Generatore di Backup** come "scialuppa di salvataggio".
+    6. **Blackout:** Se il carico richiesto (o il carico fondamentale) supera l'energia che batteria e generatore insieme possono fornire, si verifica un **Blackout**.
 
     ---
 
@@ -254,6 +241,13 @@ with col2:
     st.markdown("---")
     mwh_annui = st.number_input("Fabbisogno Annuo (MWh):", 0.0, 100.0, 8.76)
     st.caption(f"💡 Equivale a un carico costante di **{(mwh_annui * 1000) / 8760:.2f} kW**")
+    
+    # NUOVO SLIDER: Carico Fondamentale
+    perc_carico_fondamentale = st.slider(
+        "Carico Fondamentale / Emergenza (%)", 
+        min_value=10, max_value=100, value=100, step=5
+    )
+    st.caption("Se l'energia scarseggia, il sistema 'stacca' le utenze non essenziali riducendo la domanda a questa percentuale per evitare blackout totali.")
 
 st.divider()
 st.subheader("💰 Stima Investimento Iniziale (CAPEX)")
@@ -286,14 +280,17 @@ if esegui:
             anni_simulati = len(df) / 8760.0
             w_carico = (mwh_annui * 1_000_000) / (len(df) / anni_simulati) 
             
-            res = esegui_simulazione(df, kw_fv, kw_wind, w_carico, kwh_batt*1000, kw_backup*1000)
+            res = esegui_simulazione(
+                df, kw_fv, kw_wind, w_carico, kwh_batt*1000, kw_backup*1000, perc_carico_fondamentale
+            )
             
             st.subheader("📊 Risultati (Valori medi annui basati su un ciclo di 4 anni)")
-            m1, m2, m3, m4 = st.columns(4)
+            m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Autarchia Rinnovabile", f"{res['autarchia_rinnovabile']:.1f}%")
             m2.metric("Copertura Totale", f"{res['copertura_totale']:.1f}%")
-            m3.metric("Accensioni Backup", f"{res['ore_backup'] / anni_simulati:.0f} ore/anno")
-            m4.metric("Blackout Residui", f"{res['ore_blackout'] / anni_simulati:.0f} ore/anno")
+            m3.metric("Uso Backup", f"{res['ore_backup'] / anni_simulati:.0f} h/anno")
+            m4.metric("Taglio Utenze", f"{res['ore_riduzione_carico'] / anni_simulati:.0f} h/anno")
+            m5.metric("Blackout Residui", f"{res['ore_blackout'] / anni_simulati:.0f} h/anno")
             
             st.markdown("---")
             c1, c2, c3 = st.columns(3)
@@ -302,24 +299,19 @@ if esegui:
             c3.write(f"**Energia Sprecata Media:** {res['tagliata_kwh'] / anni_simulati:.0f} kWh/anno")
             
             st.markdown("---")
-            st.subheader("📊 Copertura del Carico (Aggregata per Giornata)")
-            st.caption("Questo grafico a barre mostra da dove proviene l'energia utilizzata in ogni singolo giorno dei 4 anni simulati. Il 'tetto' piatto in alto rappresenta il tuo fabbisogno costante.")
+            st.subheader("📊 Copertura Rinnovabile del Carico")
+            st.caption("Questo grafico a linea mostra la percentuale media giornaliera del carico coperta esclusivamente da fonti rinnovabili (Sole, Vento e Batteria). I cali nella linea indicano l'intervento del generatore o momenti di blackout.")
             
-            # Creazione del dataframe per il grafico
-            df_barre = pd.DataFrame({
+            # Creazione del dataframe per il grafico a singola linea
+            df_linea = pd.DataFrame({
                 "Data": df["Data_Ora"],
-                "Sole (Diretto)": res["storia_fv"],
-                "Vento (Diretto)": res["storia_wind"],
-                "Batteria (Scarica)": res["storia_batt"],
-                "Generatore Backup": res["storia_gen"],
-                "Blackout (Non Coperto)": res["storia_blackout"]
+                "% Rinnovabili": res["storia_perc_rinnovabili"]
             }).set_index("Data")
             
-            # Raggruppiamo i dati sommando i Wattora di ogni singola ora per creare un consumo Giornaliero totale in kWh
-            df_giornaliero = df_barre.resample('D').sum() / 1000.0
+            # Raggruppiamo i dati facendo la media giornaliera della percentuale per una facile lettura visiva
+            df_giornaliero_perc = df_linea.resample('D').mean()
             
-            # Streamlit bar_chart impila automaticamente le colonne multiple
-            st.bar_chart(df_giornaliero)
+            st.line_chart(df_giornaliero_perc, y="% Rinnovabili")
             
             if res['ore_blackout'] > 0:
-                st.error(f"⚠️ Attenzione: Nonostante il generatore da {kw_backup}kW, il sistema ha subito una media di {res['ore_blackout'] / anni_simulati:.0f} ore di blackout all'anno perché il carico richiesto in quelle ore superava la potenza massima del generatore.")
+                st.error(f"⚠️ Attenzione: Il sistema ha subito una media di {res['ore_blackout'] / anni_simulati:.0f} ore di blackout all'anno perché l'energia disponibile non riusciva a coprire nemmeno il carico fondamentale.")
