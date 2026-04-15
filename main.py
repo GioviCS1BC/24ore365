@@ -9,14 +9,17 @@ from streamlit_folium import st_folium
 # ==========================================
 
 def calcola_potenza_eolica(v_vento_ms, p_nominale_w=1000.0):
-    v_cut_in = 1.0    
-    v_rated = 12.0    
-    v_cut_out = 25.0  
+    # Parametri ottimizzati per venti deboli/moderati
+    v_cut_in = 2.0    # Inizia a produrre a 7.2 km/h
+    v_rated = 9.0     # Raggiunge il 100% della potenza a 32.4 km/h
+    v_cut_out = 25.0  # Si ferma per sicurezza a 90 km/h
     
     if v_vento_ms < v_cut_in or v_vento_ms > v_cut_out:
         return 0.0
     elif v_cut_in <= v_vento_ms < v_rated:
-        return p_nominale_w * ((v_vento_ms**3 - v_cut_in**3) / (v_rated**3 - v_cut_in**3))
+        # Usiamo un decadimento quadratico invece che cubico, molto più
+        # simile alle curve di potenza reali delle turbine moderne.
+        return p_nominale_w * ((v_vento_ms**2 - v_cut_in**2) / (v_rated**2 - v_cut_in**2))
     else:
         return p_nominale_w
 
