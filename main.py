@@ -323,7 +323,7 @@ if esegui:
             c2.write(f"**Energia da Backup Media:** {res['backup_kwh'] / anni_simulati:.1f} kWh/anno")
             c3.write(f"**Energia Sprecata Media:** {res['tagliata_kwh'] / anni_simulati:.0f} kWh/anno")
             
-           st.markdown("---")
+            st.markdown("---")
             st.subheader("📊 Contributo Energetico nel Tempo")
             st.caption("Questo grafico ad area mostra come il carico elettrico è stato coperto giorno per giorno dalle 4 fonti. L'altezza totale rappresenta il carico medio assorbito. I valori sono espressi in kW.")
             
