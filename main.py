@@ -325,8 +325,8 @@ if esegui:
             c3.write(f"**Energia Sprecata Media:** {res['tagliata_kwh'] / anni_simulati:.0f} kWh/anno")
             
             st.markdown("---")
-            st.subheader("📊 Contributo Energetico nel Tempo (Stacked)")
-            st.caption("Le aree sono impilate (sommate). L'altezza totale della curva rappresenta la potenza media totale assorbita per coprire il carico (in kW).")
+            st.subheader("📊 Contributo Energetico nel Tempo")
+            st.caption("L'altezza totale della curva rappresenta la potenza media totale assorbita per coprire il carico (in kW).")
             
             # 1. Creiamo un DataFrame con le 4 fonti
             df_fonti = pd.DataFrame({
