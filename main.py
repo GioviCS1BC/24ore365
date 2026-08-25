@@ -90,7 +90,11 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
     tot_eolico_wh = 0.0
     richiesta_effettiva_totale_wh = 0.0
     
-    # Lista per il grafico della percentuale
+    # --- NUOVE LISTE PER IL GRAFICO DELLE 4 FONTI ---
+    storia_fv = []
+    storia_eolico = []
+    storia_batteria = []
+    storia_generatore = []
     storia_perc_rinnovabili = []
     
     for _, row in df_energia.iterrows():
@@ -105,7 +109,6 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
         carico_effettivo_w = carico_w
         capacita_disponibile = p_rinnovabile + soc + p_backup_w
         
-        # Se l'energia non basta per tutto il carico e abbiamo impostato un limite di emergenza
         if capacita_disponibile < carico_w and perc_carico_fondamentale < 100.0:
             carico_effettivo_w = carico_w * (perc_carico_fondamentale / 100.0)
             ore_riduzione_carico += 1
@@ -114,6 +117,15 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
         
         # 1. Quanta energia rinnovabile usiamo direttamente?
         copertura_diretta = min(p_rinnovabile, carico_effettivo_w)
+        
+        # Calcoliamo quanta di questa copertura diretta è FV e quanta è Eolico (in proporzione)
+        if p_rinnovabile > 0:
+            fv_diretto = copertura_diretta * (p_fv / p_rinnovabile)
+            eolico_diretto = copertura_diretta * (p_wind / p_rinnovabile)
+        else:
+            fv_diretto = 0.0
+            eolico_diretto = 0.0
+
         carico_residuo = carico_effettivo_w - copertura_diretta
         energia_eccedente = p_rinnovabile - copertura_diretta
         energia_da_rinnovabili_ora = copertura_diretta
@@ -147,7 +159,12 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
             
         energia_fornita_rinnovabili_wh += energia_da_rinnovabili_ora
         
-        # Calcolo della percentuale di rinnovabili in quest'ora
+        # --- SALVATAGGIO DATI PER IL GRAFICO (IN kW) ---
+        storia_fv.append(fv_diretto / 1000)
+        storia_eolico.append(eolico_diretto / 1000)
+        storia_batteria.append(batt_usata_ora / 1000)
+        storia_generatore.append(gen_usato_ora / 1000)
+        
         perc_rinnovabile = (energia_da_rinnovabili_ora / carico_effettivo_w) * 100 if carico_effettivo_w > 0 else 100.0
         storia_perc_rinnovabili.append(perc_rinnovabile)
 
@@ -167,8 +184,13 @@ def esegui_simulazione(df_energia, mult_fv, mult_eolico, carico_w, batteria_wh, 
         "eolico_kwh": tot_eolico_wh / 1000,
         "richiesta_kwh": richiesta_effettiva_totale_wh / 1000,
         "tagliata_kwh": energia_tagliata_wh / 1000,
-        "storia_perc_rinnovabili": storia_perc_rinnovabili
+        "storia_perc_rinnovabili": storia_perc_rinnovabili,
+        "storia_fv": storia_fv,
+        "storia_eolico": storia_eolico,
+        "storia_batteria": storia_batteria,
+        "storia_generatore": storia_generatore
     }
+     
 
 # ==========================================
 # INTERFACCIA STREAMLIT
@@ -301,20 +323,29 @@ if esegui:
             c2.write(f"**Energia da Backup Media:** {res['backup_kwh'] / anni_simulati:.1f} kWh/anno")
             c3.write(f"**Energia Sprecata Media:** {res['tagliata_kwh'] / anni_simulati:.0f} kWh/anno")
             
-            st.markdown("---")
-            st.subheader("📊 Copertura Rinnovabile del Carico")
-            st.caption("Questo grafico a linea mostra la percentuale media giornaliera del carico coperta esclusivamente da fonti rinnovabili (Sole, Vento e Batteria). I cali nella linea indicano l'intervento del generatore o momenti di blackout.")
+           st.markdown("---")
+            st.subheader("📊 Contributo Energetico nel Tempo")
+            st.caption("Questo grafico ad area mostra come il carico elettrico è stato coperto giorno per giorno dalle 4 fonti. L'altezza totale rappresenta il carico medio assorbito. I valori sono espressi in kW.")
             
-            # Creazione del dataframe per il grafico a singola linea
-            df_linea = pd.DataFrame({
+            # 1. Creiamo un DataFrame con le 4 fonti
+            df_fonti = pd.DataFrame({
                 "Data": df["Data_Ora"],
-                "% Rinnovabili": res["storia_perc_rinnovabili"]
+                "Fotovoltaico": res["storia_fv"],
+                "Eolico": res["storia_eolico"],
+                "Batteria (Scarica)": res["storia_batteria"],
+                "Generatore Backup": res["storia_generatore"]
             }).set_index("Data")
             
-            # Raggruppiamo i dati facendo la media giornaliera della percentuale per una facile lettura visiva
-            df_giornaliero_perc = df_linea.resample('D').mean()
+            # 2. Aggreghiamo i dati facendo la media giornaliera
+            # Questo trasforma le 35.000 righe orarie in ~1.460 righe giornaliere, perfette per il grafico
+            df_giornaliero_fonti = df_fonti.resample('D').mean()
             
-            st.line_chart(df_giornaliero_perc, y="% Rinnovabili")
+            # 3. Creiamo un fantastico grafico ad area impilato
+            # (Streamlit dalla versione 1.23+ accetta la lista di colori esadecimali)
+            st.area_chart(
+                df_giornaliero_fonti, 
+                color=["#FFC300", "#3399FF", "#33CC33", "#FF3333"] 
+            )
             
             if res['ore_blackout'] > 0:
                 st.error(f"⚠️ Attenzione: Il sistema ha subito una media di {res['ore_blackout'] / anni_simulati:.0f} ore di blackout all'anno perché l'energia disponibile non riusciva a coprire nemmeno il carico fondamentale.")
