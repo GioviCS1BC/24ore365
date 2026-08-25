@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
+import altair as alt  
 
 # ==========================================
 # FUNZIONI DI CALCOLO
@@ -324,8 +325,8 @@ if esegui:
             c3.write(f"**Energia Sprecata Media:** {res['tagliata_kwh'] / anni_simulati:.0f} kWh/anno")
             
             st.markdown("---")
-            st.subheader("📊 Contributo Energetico nel Tempo")
-            st.caption("Questo grafico ad area mostra come il carico elettrico è stato coperto giorno per giorno dalle 4 fonti. L'altezza totale rappresenta il carico medio assorbito. I valori sono espressi in kW.")
+            st.subheader("📊 Contributo Energetico nel Tempo (Stacked)")
+            st.caption("Le aree sono impilate (sommate). L'altezza totale della curva rappresenta la potenza media totale assorbita per coprire il carico (in kW).")
             
             # 1. Creiamo un DataFrame con le 4 fonti
             df_fonti = pd.DataFrame({
@@ -334,18 +335,35 @@ if esegui:
                 "Eolico": res["storia_eolico"],
                 "Batteria (Scarica)": res["storia_batteria"],
                 "Generatore Backup": res["storia_generatore"]
-            }).set_index("Data")
+            })
             
             # 2. Aggreghiamo i dati facendo la media giornaliera
-            # Questo trasforma le 35.000 righe orarie in ~1.460 righe giornaliere, perfette per il grafico
-            df_giornaliero_fonti = df_fonti.resample('D').mean()
+            df_giornaliero_fonti = df_fonti.set_index("Data").resample('D').mean().reset_index()
             
-            # 3. Creiamo un fantastico grafico ad area impilato
-            # (Streamlit dalla versione 1.23+ accetta la lista di colori esadecimali)
-            st.area_chart(
-                df_giornaliero_fonti, 
-                color=["#FFC300", "#3399FF", "#33CC33", "#FF3333"] 
-            )
+            # 3. Trasformiamo i dati nel formato "long" richiesto da Altair
+            df_melted = df_giornaliero_fonti.melt(id_vars='Data', var_name='Fonte', value_name='kW')
+            
+            # 4. Definiamo i colori e l'ordine delle aree
+            ordine_fonti = ["Fotovoltaico", "Eolico", "Batteria (Scarica)", "Generatore Backup"]
+            colori_fonti = ["#FFC300", "#3399FF", "#33CC33", "#FF3333"]
+            
+            # 5. Generiamo il grafico ad area impilata (stack='zero')
+            chart = alt.Chart(df_melted).mark_area().encode(
+                x=alt.X('Data:T', title='Data'),
+                y=alt.Y('kW:Q', stack='zero', title='Potenza Media (kW)'),
+                color=alt.Color(
+                    'Fonte:N', 
+                    scale=alt.Scale(domain=ordine_fonti, range=colori_fonti),
+                    legend=alt.Legend(title="Fonte Energetica")
+                ),
+                # Ordiniamo l'impilamento affinché il sole/vento stiano in basso e il generatore in cima
+                order=alt.Order('Fonte:N', sort='ascending')
+            ).properties(
+                height=450
+            ).interactive()
+            
+            # Mostriamo il grafico in Streamlit
+            st.altair_chart(chart, use_container_width=True)
             
             if res['ore_blackout'] > 0:
                 st.error(f"⚠️ Attenzione: Il sistema ha subito una media di {res['ore_blackout'] / anni_simulati:.0f} ore di blackout all'anno perché l'energia disponibile non riusciva a coprire nemmeno il carico fondamentale.")
